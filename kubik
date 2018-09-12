@@ -12,7 +12,7 @@ fi
 
 # Only support the minikube context for local testing at the moment
 CONTEXT=minikube
-CONTEXT_FQDN=dev.test
+CONTEXT_FQDN=dev.tentonpenguin.co.uk
 
 # Set namespace and template from arguments, default to local
 NAMESPACE=${2:-local}
