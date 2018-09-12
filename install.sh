@@ -208,7 +208,7 @@ cat <<EOF >/tmp/kubik.conf.$$
 ENVIRONMENTS=$GIT_ROOT/kubik-config/environments
 APPLICATIONS=$GIT_ROOT/kubik-config/applications
 EOF
-f ! diff /tmp/kubik.conf.$$ /etc/kubik/kubik.conf 2>/dev/null >/dev/null ; then
+if ! diff /tmp/kubik.conf.$$ /etc/kubik/kubik.conf 2>/dev/null >/dev/null ; then
 	sudo mkdir -p /etc/kubik
 	sudo mv /tmp/kubik.conf.$$ /etc/kubik/kubik.conf
 else
