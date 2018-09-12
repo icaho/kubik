@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Specifiy component versions and Git root path
-MINIKUBE_VERSION=v0.7.1
-KUBECTL_VERSION=v1.3.3
+MINIKUBE_VERSION=v0.28.2
+KUBECTL_VERSION=v1.11.3
 VBOX_VERSION=5.1
 
 GIT_ROOT=~/kubikal
