@@ -259,7 +259,7 @@ if [ "$SETUP_LOCAL" == "true" ] ; then
 		cp $GIT_ROOT/kubik-config/clusters/dev.test/addons/* ~/.minikube/addons
 
 		# Increase our chances of getting the IP 192.168.99.100
-		pgrep -f "lower-ip 127.0.0.100" | xargs kill
+		pgrep -f "lower-ip 192.168.99.100" | xargs kill
 
 		# Create the minikube VM
 		if ! minikube start ; then
