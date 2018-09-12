@@ -7,10 +7,32 @@ VBOX_VERSION=5.1
 
 GIT_ROOT=~/kubikal
 
+# This script doesn't work with strict POSIX sh
+if [ "$BASH" != "/bin/bash" ] ; then
+	echo "This installer must be run with bash."
+	exit
+fi
 
+case "$1" in
+	remote-only)	echo "This installer will setup kubectl and kubik on your system."
+			SETUP_LOCAL="false"
+			DEFAULT_CONTEXT="test"
+			;;
+	local-cluster)	echo "This installer will setup minikube, kubectl and kubik on your system."
+			SETUP_LOCAL="true"
+			DEFAULT_CONTEXT="test"
+			;;
+	*)		echo "This installer will setup kubectl and kubik on your system."
+			echo ""
+			echo "Usage:"
+			echo "  install.sh remote-only    Installs tools required to manage remote clusters"
+			echo "  install.sh local-cluster  Installs a local minikube-based Kubernetes cluster"
+			echo ""
+			exit 1
+esac
 
 #
-# Detect OS, only support OS X at the moment
+# Detect OS, only support OS X and linux at the moment
 #
 
 case "$OSTYPE" in
@@ -30,7 +52,45 @@ esac
 
 echo ""
 
+#
+# Do not run as root
+#
 
+if [ "$(id -u)" == "0" ] ; then
+	echo ""
+	echo "Please run this installer as the user that will be using kubik, not root!"
+	echo ""
+	exit 1
+fi
+
+#
+# Ask for confirmation before proceeding
+#
+
+read -p "Do you want to proceed (Y/N)? " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]] ; then
+	echo "Aborted."
+	exit 1
+fi
+
+echo ""
+
+
+
+#
+# But ensure we can sudo to root
+#
+
+echo "This installer needs to be able to sudo to install some files."
+if ! sudo id 2>/dev/null >/dev/null ; then
+	echo ""
+	echo "Cannot sudo to root, aborting."
+	echo ""
+	exit 1
+fi
+
+echo ""
 
 #
 # Ensure VirtualBox is installed
@@ -148,10 +208,18 @@ cat <<EOF >/tmp/kubik.conf.$$
 ENVIRONMENTS=$GIT_ROOT/kubik-config/environments
 APPLICATIONS=$GIT_ROOT/kubik-config/applications
 EOF
-sudo mkdir -p /etc/kubik
-sudo mv /tmp/kubik.conf.$$ /etc/kubik/kubik.conf
+f ! diff /tmp/kubik.conf.$$ /etc/kubik/kubik.conf 2>/dev/null >/dev/null ; then
+	sudo mkdir -p /etc/kubik
+	sudo mv /tmp/kubik.conf.$$ /etc/kubik/kubik.conf
+else
+	echo "Already up-to-date."
+	rm /tmp/kubik.conf.$$
+fi
 
-
+if ! [ -e /etc/kubik/kubik.conf ] ; then
+	echo "Failed to install /etc/kubik/kubik.conf, aborting."
+	exit 1
+fi
 
 #
 # Install kubik to /usr/local/bin
@@ -172,26 +240,82 @@ fi
 # Initialise local Kubernetes cluster if needed
 #
 
-if [ "`minikube status`" != "Running" ] ; then
-	echo -n "--- "
-	if ! minikube start --cpus=2 --memory=2048 --disk-size=20g ; then
-		echo "Failed to initialise cluster, aborting."
-		exit 1
-	fi
-	# Give the cluster a few seconds to become ready
-	sleep 5
+if [ "$SETUP_LOCAL" == "true" ] ; then
+	if [ "$(minikube status)" != "Running" ] ; then
+		echo -n "--- "
 
-	echo "--- Found a local Kubernetes cluster"
+		# Nuke and reconfigure minikube
+		minikube delete >/dev/null 2>/dev/null
+		rm -rf ~/.minikube
+		minikube config set WantUpdateNotification false >/dev/null 2>/dev/null
+		minikube config set WantReportErrorPrompt false
+		minikube config set WantReportError true
+		minikube config set kubernetes-version $KUBERNETES_VERSION >/dev/null 2>/dev/null
+		minikube config set memory 4096 >/dev/null
+		minikube config set cpus 4 >/dev/null
+
+		# Install our addons
+		mkdir -p ~/.minikube/addons
+		cp $GIT_ROOT/kubik-config/clusters/dev.test/addons/* ~/.minikube/addons
+
+		# Increase our chances of getting the IP 192.168.99.100
+		pgrep -f "lower-ip 127.0.0.100" | xargs kill
+
+		# Create the minikube VM
+		if ! minikube start ; then
+			echo "Failed to initialise cluster, aborting."
+			exit 1
+		fi
+
+		# Give the cluster a few seconds to become ready
+		echo -n "Waiting for cluster..."
+		sleep 5
+		until kubectl --context=minikube version 2>/dev/null >/dev/null ; do
+			echo -n "."
+			sleep 5
+		done
+		echo ""
+
+		echo "--- Found a local Kubernetes cluster"
+		kubectl --context=minikube version
+	fi
+
+	# The addon manager doesn't do ingress at the moment
+	echo "--- Adding dashboard ingress"
+	kubectl apply -f $GIT_ROOT/kubik-config/clusters/dev.test/addons/*-ingress.yaml
+
+	MINIKUBE_IP="$(minikube ip)"
+	DEV_FQDN_IP="$(host -t A $DEV_FQDN | tr " " "\n" | tail -1)"
+
+	if ! [ "$DEV_FQDN_IP" == "$MINIKUBE_IP" ] ; then
+		echo ""
+		echo "WARNING: Kubernetes cluster IP $MINIKUBE_IP does not match $DEV_FQDN [$DEV_FQDN_IP]."
+		echo ""
+	fi
 fi
 
 
 
 #
-# Ensure an Ingress controller exists
+# Install additional clusters
 #
 
-echo "--- Setting up a Kubernetes Ingress controller..."
-kubectl apply -f $GIT_ROOT/kubik-config/environments/kube-system/kubernetes-ingress-controller.yaml
+mkdir -p ~/.kube
+for CLUSTER in $GIT_ROOT/kubik-config/clusters/* ; do
+	pushd "$CLUSTER/" 2>/dev/null >/dev/null
+	if [ -x "$CLUSTER/install.sh" ] ; then
+		"$CLUSTER/install.sh"
+	fi
+	popd 2>/dev/null >/dev/null
+done
+
+
+
+#
+# Pick a default cluster
+#
+
+kubectl config use-context $DEFAULT_CONTEXT
 
 
 
@@ -202,5 +326,4 @@ kubectl apply -f $GIT_ROOT/kubik-config/environments/kube-system/kubernetes-ingr
 echo "Your system should now have kubik installed and configured."
 echo ""
 echo "To spin up a local environment simply run 'kubik create'"
-echo "If you have any questions or feedback please contact MSM DevOps."
 echo ""
