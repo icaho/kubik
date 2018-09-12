@@ -256,7 +256,7 @@ if [ "$SETUP_LOCAL" == "true" ] ; then
 
 		# Install our addons
 		mkdir -p ~/.minikube/addons
-		cp $GIT_ROOT/kubik-config/clusters/dev.test/addons/* ~/.minikube/addons
+		cp $GIT_ROOT/kubik-config/clusters/dev.tentonpenguin.co.uk/addons/* ~/.minikube/addons
 
 		# Increase our chances of getting the IP 127.0.0.1
 		pgrep -f "lower-ip 127.0.0.1" | xargs kill
@@ -282,7 +282,7 @@ if [ "$SETUP_LOCAL" == "true" ] ; then
 
 	# The addon manager doesn't do ingress at the moment
 	echo "--- Adding dashboard ingress"
-	kubectl apply -f $GIT_ROOT/kubik-config/clusters/dev.test/addons/*-ingress.yaml
+	kubectl apply -f $GIT_ROOT/kubik-config/clusters/dev.tentonpenguin.co.uk/addons/*-ingress.yaml
 
 	MINIKUBE_IP="$(minikube ip)"
 	DEV_FQDN_IP="$(host -t A $DEV_FQDN | tr " " "\n" | tail -1)"
