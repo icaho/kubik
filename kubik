@@ -1,0 +1,322 @@
+#!/bin/bash
+# kubik is a kubectl wrapper for managing environments
+
+KUBIK_VERSION="v0.1"
+
+if [ "$1" = "version" ] ; then
+	echo "kubik version: $KUBIK_VERSION"
+	exit
+fi
+
+
+
+# Only support the minikube context for local testing at the moment
+CONTEXT=minikube
+CONTEXT_FQDN=dev.syrupme.net
+
+# Set namespace and template from arguments, default to local
+NAMESPACE=${2:-local}
+TEMPLATE=${3:-local}
+
+# Ensure namespaces kube-system and default aren't tampered with by kubik
+if [ "$NAMESPACE" == "default" ] || [ "$NAMESPACE" == "kube-system" ] ; then
+	echo "Namespace \"$NAMESPACE\" is reseved and cannot be used"
+	exit 1
+fi
+
+# Default paths to the environment and application templates
+ENVIRONMENTS=/etc/kubik/environments
+APPLICATIONS=/etc/kubik/applications
+
+# If there is a config file source it to override the above
+if [ -f /etc/kubik/kubik.conf ] ; then
+	. /etc/kubik/kubik.conf
+fi
+
+# Check that environments config dir exists
+if ! [ -d $ENVIRONMENTS ] ; then
+        echo "Environment configuration directory \"$ENVIRONMENTS\" not found"
+	exit 1
+fi
+
+# Check that applications config dir exists
+if ! [ -d $APPLICATIONS ] ; then
+        echo "Application configuration directory \"$APPLICATIONS\" not found"
+	exit 1
+fi
+
+# Check that kubectl exists in the user's path and is executable
+if ! [ -x "`which kubectl`" ] ; then
+	echo "kubectl executable not found in $PATH"
+	exit 1
+fi
+
+# Check that kubeconfig exists in the user's home directory
+if ! [ -e ~/.kube/config ] ; then
+	echo "kubeconfig not found in" ~/.kube/config
+	exit 1
+fi
+
+# Check that kubectl can connect to the specified context
+if ! kubectl --context=$CONTEXT version >/dev/null 2>/dev/null ; then
+	echo "kubectl could not connect to context \"$CONTEXT\", check your kubeconfig in" ~/.kube/config
+	exit 1
+fi
+
+
+
+
+
+
+function status {
+	echo --- Listing all pods of environment \"$2\" in \"$1\"
+
+	if ! environment_exists $1 $2 ; then
+		exit 1
+	fi
+
+	kubectl --context=$1 --namespace=$2 get pods -L version
+
+	echo ""
+}
+
+
+
+function ingress {
+        echo --- Listing all ingress vhosts of environment \"$2\" in \"$1\"
+
+        if ! environment_exists $1 $2 ; then
+                exit 1
+        fi
+
+        kubectl --context=$1 --namespace=$2 get ingress
+
+        echo ""
+}
+
+
+
+function deployment_exists {
+	# Check that a deployment exists
+	if ! kubectl --context=$1 --namespace=$2 get deployment $3 >/dev/null ; then
+		return 1
+	fi
+}
+
+
+
+function deployment_update {
+	echo --- Deploying \"$3\" version \"$4\" to environment \"$2\" in \"$1\"
+
+	if ! environment_exists $1 $2 ; then
+		exit 1
+	fi
+
+	if ! deployment_exists $1 $2 $3 ; then
+		exit 1
+	fi
+
+	# There is clearly a better way to do this but at the moment this will do
+	kubectl --context=$1 --namespace=$2 get deployment $3 -o yaml \
+		| sed -e "s/version: .*$/version: \"$4\"/" -e "s/image:\(.*\):.*/image:\1:$4/" \
+		| kubectl --context=$1 --namespace=$2 apply -f -
+	kubectl --context=$1 --namespace=$2 rollout status deployments/$3
+
+	echo ""
+
+	echo --- Waiting for \"$3\" pods of environment \"$2\" in \"$1\" to run
+	while true ; do
+		# Wait and print a short status message
+		sleep 1
+		LINE=`kubectl --namespace=$2 get pods -l resource=$3 --no-headers | awk '{ print $3 }' | sort -r | uniq -c | sed -e "s/^ *//g" | tr "\n" " "`
+		echo $LINE
+
+		# If all pods are in running state, return
+		if ! [ "`echo $LINE | sed -e 's/^[0-9]* Running//'`" ] ; then
+			break;
+		fi
+		sleep 4
+	done
+	echo ""
+
+	echo --- Listing \"$3\" pods of environment \"$2\" in \"$1\"
+	kubectl --context=$1 --namespace=$2 get pods -L version -l resource=$3
+
+	echo ""
+}
+
+
+
+function environment_exists {
+	# Check that a namespace exists
+	if ! kubectl --context=$1 get namespace $2 >/dev/null ; then
+		return 1
+	fi
+}
+
+
+
+function environment_create {
+	echo --- Creating environment \"$2\" using template \"$3\" in \"$1\"
+
+	# Create namespace
+	if ! kubectl --context=$1 create namespace $2 ; then
+		exit 1
+	fi
+
+	# Create secrets
+	kubectl --context=$1 --namespace=$2 create -f $ENVIRONMENTS/$3/secrets/
+
+	# Create configmaps
+	kubectl --context=$1 --namespace=$2 create -f $ENVIRONMENTS/$3/configmaps/
+
+	# Create resource services
+	kubectl --context=$1 --namespace=$2 create -f $ENVIRONMENTS/$3/resources/services/
+
+	# Create resource ingress - a bit of a hack as we need to append the domain
+	for FILE in `ls $ENVIRONMENTS/$3/resources/ingress/*.yaml` ; do
+		cat $FILE | sed -e "s/host: \(.*\)/host: \1.$2.$CONTEXT_FQDN/" | \
+			kubectl --context=$1 --namespace=$2 create -f -
+	done
+
+	# Create resource deployments
+	kubectl --context=$1 --namespace=$2 create -f $ENVIRONMENTS/$3/resources/deployments/
+
+	# Create application services
+	kubectl --context=$1 --namespace=$2 create -f $APPLICATIONS/services/
+
+        # Create application ingress - a bit of a hack as we need to append the domain
+        for FILE in `ls $APPLICATIONS/ingress/*.yaml` ; do
+                cat $FILE | sed -e "s/host: \(.*\)/host: \1.$2.$CONTEXT_FQDN/" | \
+                        kubectl --context=$1 --namespace=$2 create -f -
+        done
+
+	# Create application deployments
+	kubectl --context=$1 --namespace=$2 create -f $APPLICATIONS/deployments/
+
+	echo ""
+
+	echo --- Waiting for all pods of environment \"$2\" in \"$1\" to run
+	while true ; do
+		# Wait and print a short status message
+		sleep 1
+		LINE=`kubectl --namespace=$2 get pods --no-headers | awk '{ print $3 }' | sort -r | uniq -c | sed -e "s/^ *//g" | tr "\n" " "`
+		echo $LINE
+
+		# If all pods are in running state, return
+		if ! [ "`echo $LINE | sed -e 's/^[0-9]* Running//'`" ] ; then
+			break
+		fi
+		sleep 4
+	done
+	echo ""
+
+	status $1 $2
+
+	ingress $1 $2
+}
+
+
+
+function environment_update {
+	echo --- Updating environment \"$2\" using template \"$3\" in \"$1\"
+
+	if ! environment_exists $1 $2 ; then
+		exit 1
+	fi
+
+	# Update secrets
+	kubectl --context=$1 --namespace=$2 apply -f $ENVIRONMENTS/$3/secrets/
+
+	# Update configmaps
+	kubectl --context=$1 --namespace=$2 apply -f $ENVIRONMENTS/$3/configmaps/
+
+	# Update resource services
+	kubectl --context=$1 --namespace=$2 apply -f $ENVIRONMENTS/$3/resources/services/
+
+	# Update resource deployments
+	kubectl --context=$1 --namespace=$2 apply -f $ENVIRONMENTS/$3/resources/deployments/
+
+	# Update application services
+	kubectl --context=$1 --namespace=$2 apply -f $APPLICATIONS/services/
+
+	# Update application deployments
+	kubectl --context=$1 --namespace=$2 apply -f $APPLICATIONS/deployments/
+
+	echo ""
+}
+
+
+
+function environment_delete {
+	echo --- Deleting environment \"$2\" from \"$1\"
+
+	# Delete namespace
+	if ! kubectl --context=$1 delete namespace $2 ; then
+		exit 1
+	fi
+
+	echo ""
+
+	echo --- Waiting for environment \"$2\" to be purged from \"$1\"
+
+	echo -n "This might take a while..."
+	while kubectl --context=$1 get namespace $2 >/dev/null 2>/dev/null ; do
+		sleep 1
+	done
+	echo " done!"
+
+	echo ""
+}
+
+
+
+function help {
+	cat <<EOF
+kubik is a kubectl wrapper for managing environments
+
+Usage:
+  kubik [command]
+
+Available Commands:
+  create  [environment] [template]       Create an environment
+  update  [environment] [template]       Update an environment
+  delete  [environment]                  Delete an environment
+
+  status  [environment]                  List pods
+
+  ingress [environment]                  List ingress vhosts
+
+  deploy environment service version     Deploy a new version
+
+EOF
+}
+
+
+
+
+
+
+# Execute the specified command
+case $1 in
+	create)
+		environment_create $CONTEXT $NAMESPACE $TEMPLATE
+		;;
+	update)
+		environment_update $CONTEXT $NAMESPACE $TEMPLATE
+		;;
+	delete)
+		environment_delete $CONTEXT $NAMESPACE
+		;;
+	deploy)
+		deployment_update $CONTEXT $NAMESPACE $TEMPLATE $4
+		;;
+	status)
+		status $CONTEXT $NAMESPACE
+		;;
+	ingress)
+		ingress $CONTEXT $NAMESPACE
+		;;
+	*)
+		help;
+esac
