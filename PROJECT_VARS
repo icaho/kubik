@@ -1,0 +1,5 @@
+# Config vars for kubik
+
+GIT_ROOT=~/kubikal
+DEV_FQDN="dev.tentonpenguin.co.uk"
+DEFAULT_CONTEXT="test"

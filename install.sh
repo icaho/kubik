@@ -1,11 +1,12 @@
 #!/bin/bash
 
+# Get vars from PROJECT file
+source ./PROJECT_VARS
+
 # Specifiy component versions and Git root path
 MINIKUBE_VERSION=v0.28.2
 KUBECTL_VERSION=v1.11.3
 VBOX_VERSION=5.1
-
-GIT_ROOT=~/kubikal
 
 # This script doesn't work with strict POSIX sh
 if [ "$BASH" != "/bin/bash" ] ; then
@@ -16,11 +17,9 @@ fi
 case "$1" in
 	remote-only)	echo "This installer will setup kubectl and kubik on your system."
 			SETUP_LOCAL="false"
-			DEFAULT_CONTEXT="test"
 			;;
 	local-cluster)	echo "This installer will setup minikube, kubectl and kubik on your system."
 			SETUP_LOCAL="true"
-			DEFAULT_CONTEXT="test"
 			;;
 	*)		echo "This installer will setup kubectl and kubik on your system."
 			echo ""
@@ -76,8 +75,6 @@ fi
 
 echo ""
 
-
-
 #
 # But ensure we can sudo to root
 #
@@ -107,8 +104,6 @@ echo $VBOX_VERSION_INSTALLED | if ! grep -q "^$VBOX_VERSION" ; then
 	echo ""
 	exit 1
 fi
-
-
 
 #
 # Ensure the correct version of kubectl is installed
@@ -164,8 +159,6 @@ if [ "$MINIKUBE_VERSION" != "$MINIKUBE_VERSION_INSTALLED" ] ; then
 	exit 1
 fi
 
-
-
 #
 # Clone kubik-config repo
 #
@@ -195,8 +188,6 @@ else
 	git pull
 	popd 2>/dev/null >/dev/null
 fi
-
-
 
 #
 # Install /etc/kubik/kubik.conf
@@ -256,7 +247,7 @@ if [ "$SETUP_LOCAL" == "true" ] ; then
 
 		# Install our addons
 		mkdir -p ~/.minikube/addons
-		cp $GIT_ROOT/kubik-config/clusters/dev.tentonpenguin.co.uk/addons/* ~/.minikube/addons
+		cp $GIT_ROOT/kubik-config/clusters/$DEV_FQDN/addons/* ~/.minikube/addons
 
 		# Increase our chances of getting the IP 127.0.0.1
 		pgrep -f "lower-ip 127.0.0.1" | xargs kill
@@ -282,7 +273,7 @@ if [ "$SETUP_LOCAL" == "true" ] ; then
 
 	# The addon manager doesn't do ingress at the moment
 	echo "--- Adding dashboard ingress"
-	kubectl apply -f $GIT_ROOT/kubik-config/clusters/dev.tentonpenguin.co.uk/addons/*-ingress.yaml
+	kubectl apply -f $GIT_ROOT/kubik-config/clusters/$DEV_FQDN/addons/*-ingress.yaml
 
 	MINIKUBE_IP="$(minikube ip)"
 	DEV_FQDN_IP="$(host -t A $DEV_FQDN | tr " " "\n" | tail -1)"
@@ -309,15 +300,11 @@ for CLUSTER in $GIT_ROOT/kubik-config/clusters/* ; do
 	popd 2>/dev/null >/dev/null
 done
 
-
-
 #
 # Pick a default cluster
 #
 
 kubectl config use-context $DEFAULT_CONTEXT
-
-
 
 #
 # The end
